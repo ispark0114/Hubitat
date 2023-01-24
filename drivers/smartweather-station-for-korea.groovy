@@ -61,18 +61,18 @@ metadata {
 		attribute "feelsLike", "number"
 		attribute "percentPrecip", "number"
         
-        //command "refresh"
         command "pollAirKorea"
+        command "pollYuseong"
         //command "pollWunderground"
 	}
 
 	preferences {
-        input name: "language",	type:"enum", title: "Language / 언어", description: "Select the language / 언어를 선택하세요", defaultValue: "English",options: ["English", "한국인"]
-        input (name: "logEnable", type: "bool", title: "Debug logging", description: "<i>Debug information, useful for troubleshooting. Recommended value is <b>false</b></i>", defaultValue: true)
-        input (name: "txtEnable", type: "bool", title: "Description text logging", description: "<i>Display measured values in HE log page. Recommended value is <b>true</b></i>", defaultValue: true)
-		input "accessKey", "text", type: "password", title: "AirKorea API Key", description: isEnglish() ? "Get an apikey at www.data.go.kr" : "www.data.go.kr에서 apikey 발급 받으세요"  , required: true 
-		input "stationName", "text", title: "Station name", description: isEnglish() ? "Station name" : "측청소 이름", required: true
-        input "fakeStationName", "text", title: "Fake Station name(option)", description: isEnglish() ? "Enter the name to be displayed on the tile" : "Tile에 보여질 이름 입력하세요", required: false
+        input name: "language",	type:"enum", title: "<b>Language / 언어</b>", description: "Select the language / 언어를 선택하세요", defaultValue: "English",options: ["English", "한국인"]
+        input (name: "logEnable", type: "bool", title: isEnglish() ? "<b>Debug logging</b>" : "<b>디버그 로깅</b>", description: isEnglish() ? "<i>Debug information, useful for troubleshooting. Recommended value is <b>false</b></i>" : " <i>문제 해결에 유용한 디버그 정보. 권장 값은 <b>false</b></i>입니다." , defaultValue: true)
+        input (name: "txtEnable", type: "bool", title: isEnglish() ? "<b>Description text logging</b>" : "<b>설명 텍스트 로깅</b>", description: isEnglish() ? "<i>Display measured values in HE log page. Recommended value is <b>true</b></i>" : "<i>HE 로그 페이지에 측정된 값을 표시합니다. 권장 값은 <b>true</b></i>입니다.", defaultValue: true)
+		input "accessKey", "text", type: "password", title: "<b>AirKorea API Key</b>", description: isEnglish() ? "Get an apikey at www.data.go.kr" : "www.data.go.kr에서 apikey 발급 받으세요"  , required: true 
+		input "stationName", "text", title: "<b>Station name</b>", description: isEnglish() ? "Station name" : "측청소 이름", required: true
+        input "fakeStationName", "text", title: "<b>Fake Station name(option)</b>", description: isEnglish() ? "Enter the name to be displayed on the tile" : "Tile에 보여질 이름 입력하세요", required: false
         input name: "refreshRateMin", title: "<b>Update time in every hour</b>", type: "enum", options:[0 : "0", 15 : "15", 30 : "30"], defaultValue: "15"
         input "coThresholdValue", "decimal", title: "<b>CO Detect Threshold</b>", defaultValue: 0.0, description: isEnglish() ? "When there are more than a few, write down whether to be Detected. default:0.0" : "몇 이상일때 Detected로 할지 적으세요 default:0.0", required: false
         input type: "paragraph", element: "paragraph", title: isEnglish() ? "<b>How to look up measurement stations</b>" : "측정소 조회 방법", description: isEnglish() ? "Enter the desired region through the browser\n http://www.airkorea.or.kr/web/realSearch" : "브라우저 통해 원하시는 지역을 입력하세요\n http://www.airkorea.or.kr/web/realSearch"
@@ -129,6 +129,151 @@ def configure() {
 	logDebug "Configuare()"
 }
 
+def asyncHttpYuseong(resp, data) {
+    def info
+    log.trace "data=$data"
+    def status = resp.getStatus()
+    log.trace "status=$status"
+    if (!(status in [200, 207])) {
+        info =  "http request error code ${status}"
+        logWarn( info )
+        sendEvent(name: "Info", value: info)
+        return noResponseData()
+    }
+    def headers = resp.getHeaders()
+    log.trace "headers=$headers"
+    if( headers == null ) {
+        info =  "http request error code ${status} - Missing headers !"
+        logWarn( info )
+        sendEvent(name: "Info", value: info)
+        return noResponseData()
+    }
+    def respData = resp.getData()
+    log.trace "respData length=${respData.length()}"
+    log.trace "respData=${respData}"
+    if ( respData == null ) {
+        info =  "http request error code ${status} - respData is null !"
+        logWarn( info )
+        sendEvent(name: "Info", value: info)
+        return noResponseData()
+    }
+    // examine the 'Content-Type' - we requested 'json', but errors are returned as 'text/xml'
+    def contentType = headers['Content-Type']
+    log.trace "Content-Type=${contentType}"
+    if (contentType != null && contentType.indexOf('text/xml') >= 0) {
+        logDebug "Content-Type=${contentType}"
+        def respDataXML = new XmlParser().parseText(respData)
+        log.trace "respDataXML = ${respDataXML} "
+        def returnReasonCode = respDataXML.cmmMsgHeader.returnReasonCode.text()
+        def returnAuthMsg = respDataXML.cmmMsgHeader.returnAuthMsg.text()
+        def errMsg = respDataXML.cmmMsgHeader.errMsg.text()
+        log.warn "respDataXML.cmmMsgHeader : returnReasonCode=$returnReasonCode, returnAuthMsg=$returnAuthMsg, errMsg=$errMsg"    // returnReasonCode=30, returnAuthMsg=SERVICE_KEY_IS_NOT_REGISTERED_ERROR, errMsg=SERVICE ERROR
+        if ((returnReasonCode as int) != 0) {
+            info =  "http request returnReasonCode=$returnReasonCode, returnAuthMsg=$returnAuthMsg, errMsg=$errMsg"
+            logWarn( info )
+            sendEvent(name: "Info", value: info)
+            return noResponseData()       
+        }
+    }
+    //def errorData = resp.getErrorData()        // java.lang.Exception: No errorData data exists for async request
+    //def errorJson = resp.getErrorJson()	     // java.lang.IllegalArgumentException: No Error JSON exists for response
+    //def errorMessage = resp.getErrorMessage()  // java.lang.Exception: No errorMessage exists for async request
+    //def errorXml = resp.getErrorXml()          // java.lang.IllegalArgumentException: No Error XML exists for response
+    def json = resp.getJson()
+    //log.trace "json=$json"
+    //def xml = resp.getXml()        // org.xml.sax.SAXParseException: Content is not allowed in prolog.
+    def error = resp.hasError()      // error=false
+    //log.debug "resp.headers = ${resp.headers}"  // [Transfer-Encoding:chunked, Date:Tue, 24 Jan 2023 21:30:04 GMT, Content-Type:application/json;charset=UTF-8]
+    //logWarn "json.response.body.items[0].pm25_value = ${json.response.body.items[0].pm25_value}"
+    
+    // get the data from the response body
+    //logDebug "response data: ${resp.data}"
+    if (json.response.body.items == null) {
+        logWarn "Missing data (items) !"
+        return noResponseData()
+    }
+    if (json.response.body.items[0].pm10_value != "-") {
+        logInfo "PM10 value: ${json.response.body.items[0].pm10_value}"
+        sendEvent(name: "pm10_value", value: json.response.body.items[0].pm10_value as Integer, unit: "㎍/㎥")
+        sendEvent(name: "dustLevel",  value: json.response.body.items[0].pm10_value as Integer, unit: "㎍/㎥", displayed: true)
+    }
+    else {
+        sendEvent(name: "pm10_value", value: "--", unit: "㎍/㎥")
+        sendEvent(name: "dustLevel", value: "--", unit: "㎍/㎥")
+    }
+    if (json.response.body.items[0].pm25_value != "-") { 
+        logInfo "PM25 value: ${json.response.body.items[0].pm25_value}"
+        sendEvent(name: "pm25_value", value: json.response.body.items[0].pm25_value as Integer, unit: "㎍/㎥")
+        sendEvent(name: "fineDustLevel", value: json.response.body.items[0].pm25_value as Integer, unit: "㎍/㎥", displayed: true)
+    }
+    else {
+        sendEvent(name: "pm25_value", value: "--", unit: "㎍/㎥")
+        sendEvent(name: "fineDustLevel", value: "--", unit: "㎍/㎥")
+    }
+    def display_value
+    if (json.response.body.items[0].o3_value != "-") {
+       	logInfo "Ozone: ${json.response.body.items[0].o3_value}"
+        display_value = "\n" + json.response.body.items[0].o3_value + "\n"
+        sendEvent(name: "o3_value", value: display_value as String, unit: "ppm")
+    }
+    else {
+       	sendEvent(name: "o3_value", value: "--", unit: "ppm")
+    }
+    if (json.response.body.items[0].no2_value != "-") {
+        logInfo "NO2: ${json.response.body.items[0].no2_value}"
+        display_value = "\n" + json.response.body.items[0].no2_value + "\n"
+        sendEvent(name: "no2_value", value: display_value as String, unit: "ppm")
+    }
+    else {
+       	sendEvent(name: "no2_value", value: "--", unit: "ppm")
+    }
+    if (json.response.body.items[0].so2_value != "-") {
+        logInfo "SO2: ${json.response.body.items[0].so2_value}"
+        display_value = "\n" + json.response.body.items[0].so2_value + "\n"
+        sendEvent(name: "so2_value", value: display_value as String, unit: "ppm")
+    }
+    else {
+       	sendEvent(name: "so2_value", value: "--", unit: "ppm")
+    }
+    if (json.response.body.items[0].co_value != "-") {
+        logInfo "CO: ${json.response.body.items[0].co_value}"
+        display_value = "\n" + json.response.body.items[0].co_value + "\n"
+        def carbonMonoxide_value = "clear"
+        if ((json.response.body.items[0].co_value as Float) >= (coThresholdValue as Float)) {
+           	carbonMonoxide_value = "detected"
+        }
+        sendEvent(name: "carbonMonoxide", value: carbonMonoxide_value, displayed: true)
+        sendEvent(name: "co_value", value: display_value as String, unit: "ppm")
+    }
+    else {
+       	sendEvent(name: "co_value", value: "--", unit: "ppm")
+    }
+    def khai_text = isEnglish() ? "unknown" : "알수없음"
+    if (json.response.body.items[0].khai_value != "-") {
+        def khai = json.response.body.items[0].khai_value as Integer
+        logInfo "Khai value: ${khai}"
+        def station_display_name = json.response.body.items[0].station_name
+        /*
+        if (fakeStationName) station_display_name = fakeStationName
+        */
+        logInfo "station_display_name=${station_display_name}, date_time=${json.response.body.items[0].date_time}"
+        sendEvent(name:"data_time", value: " " + station_display_name + (isEnglish() ? " air quality numbers: ${khai}\n measurement time: " : " 대기질 수치: ${khai}\n 측정 시간: ") + json.response.body.items[0].date_time)
+   		sendEvent(name: "airQuality", value: json.response.body.items[0].khai_value as Integer)
+        if (khai > 250) khai_text = isEnglish() ? "very bad" : "매우나쁨"
+        else if (khai > 100) khai_text = isEnglish() ? "bad" : "나쁨" 
+        else if (khai > 50) khai_text =  isEnglish() ? "normal" : "보통"
+        else if (khai >= 0) khai_text =  isEnglish() ? "good" : "좋음"
+        sendEvent(name: "airQualityStatus", value: khai_text, unit: "")
+    }
+    else {
+        def station_display_name = json.response.body.items[0].station_name
+        //if (fakeStationName) station_display_name = fakeStationName
+        sendEvent(name:"data_time", value: " " + station_display_name + (isEnglish() ? " Air quality numbers: no information\n measurement time: " : " 대기질 수치: 정보없음\n 측정 시간: ") + json.response.body.items[0].date_time)                    
+        sendEvent(name: "airQualityStatus", value: khai_text)
+    }
+    sendEvent(name: "Info", value: "Yuseong data parsed succesfuly")
+}
+
 
 def asyncHttpAirKorea(resp, data){
 /*
@@ -163,7 +308,7 @@ boolean hasError()
         return noResponseData()
     }
     def respData = resp.getData()
-    log.trace "respData=$respData"
+    log.trace "respData longth=${respData.length()}"
     if ( respData == null ) {
         info =  "http request error code ${status} - respData is null !"
         logWarn( info )
@@ -365,6 +510,27 @@ def pollAirKorea() {
         return
 	}
     else logDebug "Missing data from the device settings station name or access key"
+}
+
+// https://www.yuseong.go.kr/eng/
+// https://www.yuseong.go.kr/ys_api/ys_api/getCtprvnList/?pageNo=1&numOfRows=100&rstTy=json
+
+def pollYuseong() {
+	logDebug "pollYuseong()"
+    sendEvent(name: "Info", value: "polling Yuseong")
+    if (stationName) {
+        Map params = [
+    	    //uri: "https://www.yuseong.go.kr/ys_api/ys_api/getCtprvnList/?pageNo=1&numOfRows=100&rstTy=json",
+            //uri: "https://www.yuseong.go.kr/ys_api/ys_api/getCtprvnList/?pageNo=1&numOfRows=10&rstTy=json",            // 10 rows only
+            uri: "https://www.yuseong.go.kr/ys_api/ys_api/getCtprvnList/?pageNo=15388&numOfRows=1&rstTy=json",         // 1 row, but last data ?
+        	contentType: "application/json",
+            ignoreSSLIssues: true
+    	]
+      	logDebug "uri: ${params.uri}"
+        asynchttpGet("asyncHttpYuseong", params)        
+        return
+	}
+    else logWarn "Missing data from the device settings station name"
 }
 
 // WunderGround weather handle commands
