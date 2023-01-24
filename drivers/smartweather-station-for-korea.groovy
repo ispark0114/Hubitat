@@ -12,15 +12,16 @@
  *
  *  Based on original DH codes by SmartThings and SeungCheol Lee(slasher)
  */
-public static String version() { return "v2.0.00.20230122" }
+public static String version() { return "v2.0.00.20230124" }
 /*
+ *  2023/01/24 >>> v2.0.01 - kkossev    - English / 한국인 language option; asynchttpGet(); xml/json response errors handling
  *  2023/01/22 >>> v2.0.00 - thebearmay - porting to Hubitat
  *	2020/05/22 >>> v0.0.16 - Booung     - Explicit displayed flag
  *	2019/04/28 >>> v0.0.15 - Booung     - Updarte reference table
  */
   
 metadata {
-	definition (name: "SmartWeather Station For Korea", namespace: "WooBooung", author: "Booung", ocfDeviceType: "x.com.st.d.airqualitysensor") {
+	definition (name: "SmartWeather Station For Korea", namespace: "WooBooung", author: "Booung", importUrl: "https://raw.githubusercontent.com/ispark0114/Hubitat/main/drivers/smartweather-station-for-korea.groovy") {
 		capability "Air Quality"// Sensor"
 		capability "Carbon Monoxide Detector" // co : clear, detected
 		//capability "Dust Sensor" // fineDustLevel : PM 2.5   dustLevel : PM 10
@@ -28,10 +29,16 @@ metadata {
         capability "Temperature Measurement"
         capability "Relative Humidity Measurement"
 		capability "Ultraviolet Index"
-		capability "Polling"
-        capability "Configuration"
+		//capability "Polling"
+        //capability "Configuration"
 		capability "Refresh"
 		capability "Sensor"
+        
+        attribute "fineDustLevel", "number"    // PM 2.5   
+        attribute "dustLevel", "number"        // PM 10 airQuality
+        attribute "airQuality", "number"
+        attribute "Info", "string"  
+        attribute "data_time", "string"  
 
 		// Air Korea infos for WebCore
 		attribute "airQualityStatus", "string"
@@ -54,27 +61,37 @@ metadata {
 		attribute "feelsLike", "number"
 		attribute "percentPrecip", "number"
         
-        command "refresh"
+        //command "refresh"
         command "pollAirKorea"
-        command "pollWunderground"
+        //command "pollWunderground"
 	}
 
 	preferences {
-		input "accessKey", "text", type: "password", title: "AirKorea API Key", description: "www.data.go.kr에서 apikey 발급 받으세요", required: true 
-		input "stationName", "text", title: "Station name", description: "측청소 이름", required: true
-        input "fakeStationName", "text", title: "Fake Station name(option)", description: "Tile에 보여질 이름 입력하세요", required: false
-        input name: "refreshRateMin", title: "Update time in every hour", type: "enum", options:[0 : "0", 15 : "15", 30 : "30"], defaultValue: "15", displayDuringSetup: true
-        input "coThresholdValue", "decimal", title: "CO Detect Threshold", defaultValue: 0.0, description: "몇 이상일때 Detected로 할지 적으세요 default:0.0", required: false
-        input type: "paragraph", element: "paragraph", title: "측정소 조회 방법", description: "브라우저 통해 원하시는 지역을 입력하세요\n http://www.airkorea.or.kr/web/realSearch", displayDuringSetup: false
-		input type: "paragraph", element: "paragraph", title: "출처", description: "Airkorea\n데이터는 실시간 관측된 자료이며 측정소 현지 사정이나 데이터의 수신상태에 따라 미수신될 수 있습니다.", displayDuringSetup: false
-        input type: "paragraph", element: "paragraph", title: "Version", description: version(), displayDuringSetup: false
+        input name: "language",	type:"enum", title: "Language / 언어", description: "Select the language / 언어를 선택하세요", defaultValue: "English",options: ["English", "한국인"]
+        input (name: "logEnable", type: "bool", title: "Debug logging", description: "<i>Debug information, useful for troubleshooting. Recommended value is <b>false</b></i>", defaultValue: true)
+        input (name: "txtEnable", type: "bool", title: "Description text logging", description: "<i>Display measured values in HE log page. Recommended value is <b>true</b></i>", defaultValue: true)
+		input "accessKey", "text", type: "password", title: "AirKorea API Key", description: isEnglish() ? "Get an apikey at www.data.go.kr" : "www.data.go.kr에서 apikey 발급 받으세요"  , required: true 
+		input "stationName", "text", title: "Station name", description: isEnglish() ? "Station name" : "측청소 이름", required: true
+        input "fakeStationName", "text", title: "Fake Station name(option)", description: isEnglish() ? "Enter the name to be displayed on the tile" : "Tile에 보여질 이름 입력하세요", required: false
+        input name: "refreshRateMin", title: "<b>Update time in every hour</b>", type: "enum", options:[0 : "0", 15 : "15", 30 : "30"], defaultValue: "15"
+        input "coThresholdValue", "decimal", title: "<b>CO Detect Threshold</b>", defaultValue: 0.0, description: isEnglish() ? "When there are more than a few, write down whether to be Detected. default:0.0" : "몇 이상일때 Detected로 할지 적으세요 default:0.0", required: false
+        input type: "paragraph", element: "paragraph", title: isEnglish() ? "<b>How to look up measurement stations</b>" : "측정소 조회 방법", description: isEnglish() ? "Enter the desired region through the browser\n http://www.airkorea.or.kr/web/realSearch" : "브라우저 통해 원하시는 지역을 입력하세요\n http://www.airkorea.or.kr/web/realSearch"
+		input type: "paragraph", element: "paragraph", title: isEnglish() ? "<b>Source</b>" : "출처", description: isEnglish() ? "Airkorea\nData is real-time observed data and may not be received depending on the local situation at the measurement station or the reception status of the data." : "Airkorea\n데이터는 실시간 관측된 자료이며 측정소 현지 사정이나 데이터의 수신상태에 따라 미수신될 수 있습니다."
+        input type: "paragraph", element: "paragraph", title: "<b>Version</b>", description: version()
    		input "zipcode", "text", title:"Zip code"
     }
 }
 
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import groovy.util.XmlSlurper
+import groovy.transform.Field
+
+private isEnglish() {language=="English"}
+
 // parse events into attributes
 def parse(String description) {
-	log.debug "Parsing '${description}'"
+	logDebug "Parsing '${description}'"
 }
 
 def installed() {
@@ -86,12 +103,12 @@ def uninstalled() {
 }
 
 def updated() {
-	log.debug "updated()"
+	logDebug "updated()"
 	refresh()
 }
 
 def refresh() {
-	log.debug "refresh()"
+	logDebug "refresh()"
 	unschedule()
     
 	def airKoreaHealthCheckInterval = 15
@@ -100,54 +117,135 @@ def refresh() {
     	airKoreaHealthCheckInterval = Integer.parseInt($settings.refreshRateMin)
     }
 
-    log.debug "airKoreaHealthCheckInterval $airKoreaHealthCheckInterval"
+    logDebug "airKoreaHealthCheckInterval $airKoreaHealthCheckInterval"
     
     def wunderGroundHealthCheckInterval = airKoreaHealthCheckInterval + 1
     schedule("0 $airKoreaHealthCheckInterval * * * ?", pollAirKorea)
-    log.debug "wunderGroundHealthCheckInterval $wunderGroundHealthCheckInterval"
-    schedule("0 $wunderGroundHealthCheckInterval * * * ?", pollWunderground)
+    //logDebug "wunderGroundHealthCheckInterval $wunderGroundHealthCheckInterval"
+    //schedule("0 $wunderGroundHealthCheckInterval * * * ?", pollWunderground)
 }
 
 def configure() {
-	log.debug "Configuare()"
+	logDebug "Configuare()"
 }
 
-// Air Korea handle commands
-def pollAirKorea() {
-	log.debug "pollAirKorea()"
-    def dthVersion = "0.0.11"
-    if (stationName && accessKey) {
-        def params = [
-    	    uri: "http://apis.data.go.kr/B552584/ArpltnInforInqireSvc/getMsrstnAcctoRltmMesureDnsty?stationName=${stationName}&dataTerm=DAILY&pageNo=1&numOfRows=1&ServiceKey=${accessKey}&ver=1.3&returnType=json",
-        	contentType: 'application/json'
-    	]
-        
-        try {
-        	log.debug "uri: ${params.uri}"
-            
-            httpGet(params) {resp ->
-                resp.headers.each {
-                    log.debug "${it.name} : ${it.value}"
-                }
-                // get the contentType of the response
-                log.debug "response contentType: ${resp.contentType}"
-                // get the status code of the response
-                log.debug "response status code: ${resp.status}"
-                if (resp.status == 200) {
+
+def asyncHttpAirKorea(resp, data){
+/*
+AsyncResponse Method	            Description
+int getStatus()	                    The status code of the response from the call
+Map<String, String> getHeaders()	A map of the headers returned from the call
+String getData()	                String value of the response body from the call
+String getErrorData()	
+String getErrorJson()	
+String getErrorMessage()	
+GPathResult getErrorXml()	
+Object getJson()	
+GPathResult getXml()	
+boolean hasError()
+*/
+    def info
+    log.trace "data=$data"
+    def status = resp.getStatus()
+    log.trace "status=$status"
+    if (!(status in [200, 207])) {
+        info =  "http request error code ${status}"
+        logWarn( info )
+        sendEvent(name: "Info", value: info)
+        return noResponseData()
+    }
+    def headers = resp.getHeaders()
+    log.trace "headers=$headers"
+    if( headers == null ) {
+        info =  "http request error code ${status} - Missing headers !"
+        logWarn( info )
+        sendEvent(name: "Info", value: info)
+        return noResponseData()
+    }
+    def respData = resp.getData()
+    log.trace "respData=$respData"
+    if ( respData == null ) {
+        info =  "http request error code ${status} - respData is null !"
+        logWarn( info )
+        sendEvent(name: "Info", value: info)
+        return noResponseData()
+    }
+    // examine the 'Content-Type' - we requested 'json', but errors are returned as 'text/xml'
+    def contentType = headers['Content-Type']
+    log.trace "Content-Type=${contentType}"
+    if (contentType != null && contentType.indexOf('text/xml') >= 0) {
+        logDebug "Content-Type=${contentType}"
+        def respDataXML = new XmlParser().parseText(respData)
+        log.trace "respDataXML = ${respDataXML} "
+        def returnReasonCode = respDataXML.cmmMsgHeader.returnReasonCode.text()
+        def returnAuthMsg = respDataXML.cmmMsgHeader.returnAuthMsg.text()
+        def errMsg = respDataXML.cmmMsgHeader.errMsg.text()
+        log.warn "respDataXML.cmmMsgHeader : returnReasonCode=$returnReasonCode, returnAuthMsg=$returnAuthMsg, errMsg=$errMsg"    // returnReasonCode=30, returnAuthMsg=SERVICE_KEY_IS_NOT_REGISTERED_ERROR, errMsg=SERVICE ERROR
+        if ((returnReasonCode as int) != 0) {
+            info =  "http request returnReasonCode=$returnReasonCode, returnAuthMsg=$returnAuthMsg, errMsg=$errMsg"
+            logWarn( info )
+            sendEvent(name: "Info", value: info)
+            return noResponseData()       
+        }
+    }
+    //def errorData = resp.getErrorData()
+    //def errorJson = resp.getErrorJson()	
+    //def errorMessage = resp.getErrorMessage()
+    //def errorXml = resp.getErrorXml()
+    //def json = resp.getJson()
+    
+    
+    
+    return noResponseData()
+    
+    def xml = resp.getXml()
+    def error = resp.hasError()
+    log.trace "xml=$xml error=$error"
+    
+    log.debug "resp.headers = ${resp.headers}"
+    resp.headers.each { key, value -> 
+        logDebug "<i>$key</i>: <b>$value</b>"
+    }
+    /*
+    resp.data.each { key -> 
+        logDebug "<i>$key</i>"
+    }
+    */
+    logDebug "<i>resp</i> : <b>${resp}</b>"
+    logDebug "<i>resp.data</i> : <b>${resp.data}</b>"
+
+/*  
+    if (resp.getStatus() == 200 || resp.getStatus() == 207) {
+			Map setStatusResult = parseJson(resp.data)
+        log.warn "getStatus = ${resp.getStatus()},  setStatusResult = setStatusResult"
+	}
+*/
+/*    
+            if (debugEnable) log.debug resp.data
+            try{
+				def jSlurp = new JsonSlurper()
+			    h2Data = (Map)jSlurp.parseText((String)resp.data)
+            } catch (eIgnore) {
+                if (debugEnable) log.debug "H2: $h2Data <br> ${resp.data}"
+                return
+            } 
+*/
                     // get the data from the response body
-                    //log.debug "response data: ${resp.data}"
-              
-                    if( resp.data.list[0].pm10Value != "-" ) {
-                        log.debug "PM10 value: ${resp.data.list[0].pm10Value}"
+                    logDebug "response data: ${resp.data}"
+                    if( resp.data?.list == null ) {
+                        logWarn "Missing data (list) !"
+                        return noResponseData()
+                    }
+                    if( resp.data?.list[0]?.pm10Value != "-" ) {
+                        logDebug "PM10 value: ${resp.data.list[0].pm10Value}"
                         sendEvent(name: "pm10_value", value: resp.data.list[0].pm10Value as Integer, unit: "㎍/㎥")
                         sendEvent(name: "dustLevel", value: resp.data.list[0].pm10Value as Integer, unit: "㎍/㎥", displayed: true)
                     } else {
                     	sendEvent(name: "pm10_value", value: "--", unit: "㎍/㎥")
                         sendEvent(name: "dustLevel", value: "--", unit: "㎍/㎥")
                     }
-                    
                     if( resp.data.list[0].pm25Value != "-" ) { 
-                        log.debug "PM25 value: ${resp.data.list[0].pm25Value}"
+                        logDebug "PM25 value: ${resp.data.list[0].pm25Value}"
                         sendEvent(name: "pm25_value", value: resp.data.list[0].pm25Value as Integer, unit: "㎍/㎥")
                         sendEvent(name: "fineDustLevel", value: resp.data.list[0].pm25Value as Integer, unit: "㎍/㎥", displayed: true)
                     } else {
@@ -157,28 +255,28 @@ def pollAirKorea() {
                     
                     def display_value
                     if( resp.data.list[0].o3Value != "-" ) {
-                    	log.debug "Ozone: ${resp.data.list[0].o3Value}"
+                    	logDebug "Ozone: ${resp.data.list[0].o3Value}"
                         display_value = "\n" + resp.data.list[0].o3Value + "\n"
                         sendEvent(name: "o3_value", value: display_value as String, unit: "ppm")
                     } else
                     	sendEvent(name: "o3_value", value: "--", unit: "ppm")
                     
                     if( resp.data.list[0].no2Value != "-" ) {
-                        log.debug "NO2: ${resp.data.list[0].no2Value}"
+                        logDebug "NO2: ${resp.data.list[0].no2Value}"
                         display_value = "\n" + resp.data.list[0].no2Value + "\n"
                         sendEvent(name: "no2_value", value: display_value as String, unit: "ppm")
                     } else
                     	sendEvent(name: "no2_value", value: "--", unit: "ppm")
                     
                     if( resp.data.list[0].so2Value != "-" ) {
-                        log.debug "SO2: ${resp.data.list[0].so2Value}"
+                        logDebug "SO2: ${resp.data.list[0].so2Value}"
                         display_value = "\n" + resp.data.list[0].so2Value + "\n"
                         sendEvent(name: "so2_value", value: display_value as String, unit: "ppm")
                     } else
                     	sendEvent(name: "so2_value", value: "--", unit: "ppm")
                     
                     if( resp.data.list[0].coValue != "-" ) {
-                        log.debug "CO: ${resp.data.list[0].coValue}"
+                        logDebug "CO: ${resp.data.list[0].coValue}"
                         display_value = "\n" + resp.data.list[0].coValue + "\n"
                         
                         def carbonMonoxide_value = "clear"
@@ -192,24 +290,24 @@ def pollAirKorea() {
                     } else
                     	sendEvent(name: "co_value", value: "--", unit: "ppm")
                     
-                    def khai_text = "알수없음"
+                    def khai_text = isEnglish() ? "unknown" : "알수없음"
                     if( resp.data.list[0].khaiValue != "-" ) {
                         def khai = resp.data.list[0].khaiValue as Integer
-                        log.debug "Khai value: ${khai}"
+                        logDebug "Khai value: ${khai}"
                         
                         def station_display_name = resp.data.parm.stationName
                         
                         if (fakeStationName)
                         	station_display_name = fakeStationName
                         
-	                    sendEvent(name:"data_time", value: " " + station_display_name + " 대기질 수치: ${khai}\n 측정 시간: " + resp.data.list[0].dataTime + "\nVersion: " + dthVersion)
+	                    sendEvent(name:"data_time", value: " " + station_display_name + isEnglish() ? " air quality numbers: ${khai}\n measurement time: " : " 대기질 수치: ${khai}\n 측정 시간: " + resp.data.list[0].dataTime + "\nVersion: " + dthVersion)
                         
                   		sendEvent(name: "airQuality", value: resp.data.list[0].khaiValue as Integer, displayed: true)
 
-                        if (khai > 250) khai_text="매우나쁨"
-                        else if (khai > 100) khai_text="나쁨"
-                        else if (khai > 50) khai_text="보통"
-                        else if (khai >= 0) khai_text="좋음"
+                        if (khai > 250) khai_text = isEnglish() ? "very bad" : "매우나쁨"
+                        else if (khai > 100) khai_text = isEnglish() ? "bad" : "나쁨" 
+                        else if (khai > 50) khai_text =  isEnglish() ? "normal" : "보통"
+                        else if (khai >= 0) khai_text =  isEnglish() ? "good" : "좋음"
                         
                         sendEvent(name: "airQualityStatus", value: khai_text, unit: "")
                         
@@ -220,23 +318,58 @@ def pollAirKorea() {
                         	station_display_name = fakeStationName
 
                     
-	                    sendEvent(name:"data_time", value: " " + station_display_name + " 대기질 수치: 정보없음\n 측정 시간: " + resp.data.list[0].dataTime)                    
+	                    sendEvent(name:"data_time", value: " " + station_display_name + isEnglish() ? " Air quality numbers: no information\n measurement time: " : " 대기질 수치: 정보없음\n 측정 시간: " + resp.data.list[0].dataTime)                    
                     	sendEvent(name: "airQualityStatus", value: khai_text)
                     }
-          		}
-            	else if (resp.status==429) log.debug "You have exceeded the maximum number of refreshes today"	
-                else if (resp.status==500) log.debug "Internal server error"
-            }
-        } catch (e) {
-            log.error "error: $e"
-        }
+}
+
+def noResponseData() {
+    def unknown = isEnglish() ? "unknown" : "알수없음"
+    
+    sendEvent(name: "pm10_value", value: "--", unit: "㎍/㎥")
+    sendEvent(name: "dustLevel", value: "--", unit: "㎍/㎥")    
+    sendEvent(name: "pm25_value", value: "--", unit: "㎍/㎥")
+    sendEvent(name: "fineDustLevel", value: "--", unit: "㎍/㎥")    
+    sendEvent(name: "o3_value", value: "--", unit: "ppm")
+    sendEvent(name: "no2_value", value: "--", unit: "ppm")
+    sendEvent(name: "so2_value", value: "--", unit: "ppm")
+    sendEvent(name: "carbonMonoxide", value: "--")
+    sendEvent(name: "co_value", value: "--", unit: "ppm")
+    sendEvent(name: "airQuality", value: "--")
+    sendEvent(name: "airQualityStatus", value: khai_text, unit: "")
+    sendEvent(name: "data_time", value: unknown )
+    sendEvent(name: "airQualityStatus", value: unknown, unit: "")
+    return false
+}
+
+
+// Air Korea handle commands
+def pollAirKorea() {
+	logDebug "pollAirKorea()"
+    def dthVersion = "0.0.11"
+    if (stationName && accessKey) {
+        def accessKey_encode = URLEncoder.encode(URLDecoder.decode(settings.accessKey.toString(), "UTF-8"), "UTF-8").replace("+", "%2B");
+        //def accessKey_encode = settings.accessKey
+        // g5wuVXrLzJMBI9kR2gmdXm6ltsn0zYEicoOG7g2xNHZnGZVp9v7znsIO45M2l7R6rlE5wiD/jtIZupMYvyN2Pg==
+        Map params = [
+            // https://github.com/mckim27/home-assistant-custom-component/blob/master/custom_components/airkorea/sensor.py  // 
+            // Latest commit cf2eeee on Apr 12, 2021
+            // http://apis.data.go.kr/B552584
+            
+    	    uri: "http://apis.data.go.kr/B552584/ArpltnInforInqireSvc/getMsrstnAcctoRltmMesureDnsty?stationName=${stationName}&dataTerm=DAILY&pageNo=1&numOfRows=1&ServiceKey=${accessKey_encode}&ver=1.3&returnType=json",
+        	contentType: 'application/json'//,
+            //ignoreSSLIssues: true
+    	]
+      	logDebug "uri: ${params.uri}"
+        asynchttpGet("asyncHttpAirKorea", params)        
+        return
 	}
-    else log.debug "Missing data from the device settings station name or access key"
+    else logDebug "Missing data from the device settings station name or access key"
 }
 
 // WunderGround weather handle commands
 def pollWunderground() {
-	log.debug "pollAirKorea()"
+	logDebug "pollWunderground()"
 	
 	// Current conditions
 
@@ -278,7 +411,7 @@ def pollWunderground() {
         def dtf = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ")
 
         def sunriseDate = dtf.parse(obs.sunriseTimeLocal)
-        log.info "'${obs.sunriseTimeLocal}'"
+        logInfo "'${obs.sunriseTimeLocal}'"
 
         def sunsetDate = dtf.parse(obs.sunsetTimeLocal)
 
@@ -303,17 +436,17 @@ def pollWunderground() {
             send(name: "forecastIcon", value: icon, displayed: false)
         }       
 		else {
-			log.warn "Forecast not found"
+			logWarn "Forecast not found"
 		}
 	}
 	else {
-		log.warn "No response from Weather Underground API"
+		logWarn "No response from Weather Underground API"
 	}
 }
 
 // get weather data api
 private get() {
-	getTwcConditions(zipCode)
+	//getTwcConditions(zipCode) // SmartThings WeatherUnderground (WU) APIs specific
 }
 
 private localDate(timeZone) {
@@ -323,7 +456,7 @@ private localDate(timeZone) {
 }
 
 private send(map) {
-	log.debug "WUSTATION: event: $map"
+	logDebug "WUSTATION: event: $map"
 	sendEvent(map)
 }
 
@@ -372,4 +505,22 @@ private estimateLux(obs, sunriseDate, sunsetDate) {
 	}
 
 	lux
+}
+
+def logDebug(msg) {
+    if (settings?.logEnable) {
+        log.debug "${device.displayName} " + msg
+    }
+}
+
+def logWarn(msg) {
+    if (settings?.logEnable) {
+        log.warn "${device.displayName} " + msg
+    }
+}
+
+def logInfo(msg) {
+    if (settings?.txtEnable) {
+        log.info "${device.displayName} " + msg
+    }
 }
