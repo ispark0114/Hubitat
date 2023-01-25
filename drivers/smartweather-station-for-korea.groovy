@@ -10,35 +10,39 @@
  *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
  *  for the specific language governing permissions and limitations under the License.
  *
- *  Based on original DH codes by SmartThings and SeungCheol Lee(slasher)
- */
-public static String version() { return "v2.0.02.20230125" }
-/*
- *  2023/01/25 >>> v2.0.02 - kkossev    - AirKorea parsing fixes
- *  2023/01/24 >>> v2.0.01 - kkossev    - English / 한국인 language option; asynchttpGet(); xml/json response errors handling
- *  2023/01/22 >>> v2.0.00 - thebearmay - porting to Hubitat
- *	2020/05/22 >>> v0.0.16 - Booung     - Explicit displayed flag
+ *  Based on WooBooung ST DTH, based on original DH codes by SmartThings and SeungCheol Lee(slasher)
+ *
  *	2019/04/28 >>> v0.0.15 - Booung     - Updarte reference table
+ *	2020/05/22 >>> v0.0.16 - Booung     - Explicit displayed flag
+ *  2023/01/22 >>> v2.0.00 - thebearmay - porting to Hubitat
+ *  ver. 2.0.1  2023-01-24 - kkossev    - English / 한국인 language option; asynchttpGet(); xml/json response errors handling
+ *  ver. 2.0.2  2023-01-25 - kkossev    - AirKorea parsing fixes; code cleanup; 
  */
-  
+
+def version() { "2.0.2" }
+def timeStamp() {"2023/01/25 11:29 AM"}
+
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import groovy.util.XmlSlurper
+import groovy.transform.Field
+
 metadata {
 	definition (name: "SmartWeather Station For Korea", namespace: "WooBooung", author: "Booung", importUrl: "https://raw.githubusercontent.com/ispark0114/Hubitat/main/drivers/smartweather-station-for-korea.groovy") {
-		capability "Air Quality"// Sensor"
-		capability "Carbon Monoxide Detector" // co : clear, detected
-		//capability "Dust Sensor" // fineDustLevel : PM 2.5   dustLevel : PM 10
+		capability "Sensor"
+		capability "Air Quality"                    // airQualityIndex - NUMBER, range:0..500
+		capability "Carbon Monoxide Detector"       // co :  ["clear", "tested", "detected"]
+		//capability "Dust Sensor"                  // fineDustLevel : PM 2.5   dustLevel : PM 10
         capability "Illuminance Measurement"
         capability "Temperature Measurement"
         capability "Relative Humidity Measurement"
-		capability "Ultraviolet Index"
-		//capability "Polling"
+		capability "Ultraviolet Index"              // ultravioletIndex - NUMBER ( WunderGround )
         //capability "Configuration"
 		capability "Refresh"
-		capability "Sensor"
         
+        attribute "Info", "string"  
         attribute "fineDustLevel", "number"    // PM 2.5   
         attribute "dustLevel", "number"        // PM 10 airQuality
-        attribute "airQuality", "number"
-        attribute "Info", "string"  
         attribute "data_time", "string"  
 
 		// Air Korea infos for WebCore
@@ -78,15 +82,10 @@ metadata {
         input "coThresholdValue", "decimal", title: "<b>CO Detect Threshold</b>", defaultValue: 0.0, description: isEnglish() ? "When there are more than a few, write down whether to be Detected. default:0.0" : "몇 이상일때 Detected로 할지 적으세요 default:0.0", required: false
         input type: "paragraph", element: "paragraph", title: isEnglish() ? "<b>How to look up measurement stations</b>" : "측정소 조회 방법", description: isEnglish() ? "Enter the desired region through the browser\n http://www.airkorea.or.kr/web/realSearch" : "브라우저 통해 원하시는 지역을 입력하세요\n http://www.airkorea.or.kr/web/realSearch"
 		input type: "paragraph", element: "paragraph", title: isEnglish() ? "<b>Source</b>" : "출처", description: isEnglish() ? "Airkorea\nData is real-time observed data and may not be received depending on the local situation at the measurement station or the reception status of the data." : "Airkorea\n데이터는 실시간 관측된 자료이며 측정소 현지 사정이나 데이터의 수신상태에 따라 미수신될 수 있습니다."
-        input type: "paragraph", element: "paragraph", title: "<b>Version</b>", description: version()
-   		input "zipcode", "text", title:"Zip code"
+   		//input "zipcode", "text", title:"Zip code"
     }
 }
 
-import groovy.json.JsonOutput
-import groovy.json.JsonSlurper
-import groovy.util.XmlSlurper
-import groovy.transform.Field
 
 private isEnglish() {language=="English"}
 
@@ -130,6 +129,7 @@ def configure() {
 	logDebug "Configuare()"
 }
 
+/*
 def asyncHttpYuseong(resp, data) {
     def info
     log.trace "data=$data"
@@ -254,12 +254,10 @@ def asyncHttpYuseong(resp, data) {
         def khai = json.response.body.items[0].khai_value as Integer
         logInfo "Khai value: ${khai}"
         def station_display_name = json.response.body.items[0].station_name
-        /*
-        if (fakeStationName) station_display_name = fakeStationName
-        */
+        //     if (fakeStationName) station_display_name = fakeStationName
         logInfo "station_display_name=${station_display_name}, date_time=${json.response.body.items[0].date_time}"
         sendEvent(name:"data_time", value: " " + station_display_name + (isEnglish() ? " air quality numbers: ${khai}\n measurement time: " : " 대기질 수치: ${khai}\n 측정 시간: ") + json.response.body.items[0].date_time)
-   		sendEvent(name: "airQuality", value: json.response.body.items[0].khai_value as Integer)
+   		sendEvent(name: "airQualityIndex", value: json.response.body.items[0].khai_value as Integer)
         if (khai > 250) khai_text = isEnglish() ? "very bad" : "매우나쁨"
         else if (khai > 100) khai_text = isEnglish() ? "bad" : "나쁨" 
         else if (khai > 50) khai_text =  isEnglish() ? "normal" : "보통"
@@ -274,22 +272,9 @@ def asyncHttpYuseong(resp, data) {
     }
     sendEvent(name: "Info", value: "Yuseong data parsed succesfuly")
 }
-
+*/
 
 def asyncHttpAirKorea(resp, data){
-/*
-AsyncResponse Method	            Description
-int getStatus()	                    The status code of the response from the call
-Map<String, String> getHeaders()	A map of the headers returned from the call
-String getData()	                String value of the response body from the call
-String getErrorData()	
-String getErrorJson()	
-String getErrorMessage()	
-GPathResult getErrorXml()	
-Object getJson()	
-GPathResult getXml()	
-boolean hasError()
-*/
     def info
     //log.trace "data=$data"
     def status = resp.getStatus()
@@ -343,22 +328,29 @@ boolean hasError()
     def error = resp.hasError()
     //log.trace "xml=$xml error=$error"
     //log.debug "resp.headers = ${resp.headers}"
+    
+    
+// TODO - parse non-existant stations response ( totalCount ) 
+// TODO - parse header    {"resultMsg":"NORMAL_CODE","resultCode":"00"}
+// http://apis.data.go.kr/B552584/ArpltnInforInqireSvc/getMsrstnAcctoRltmMesureDnsty?stationName=%EA%B5%AC%EB%A1%9C%EB%8F%99&dataTerm=DAILY&pageNo=1&numOfRows=1&ServiceKey=JoclFn%2Fvu%2BT%2BESM92PhuHngwYcFJSgOq3o6OzXWj4Ct9Ckj%2FfIApDeTeJEFXVarqMs9BtQYu%2BpEWmfhaXmvNnw%3D%3D&ver=1.3&returnType=json    
+// {"response":{"body":{"totalCount":0,"items":[],"pageNo":1,"numOfRows":1},"header":{"resultMsg":"NORMAL_CODE","resultCode":"00"}}}    
+    
                     // get the data from the response body
                     logDebug "response data: ${resp.data}"
-                    if( json.response.body.items == null ) {
+                    if ( json.response.body.items == null ) {
                         logWarn "Missing data (list) !"
                         return noResponseData()
                     }
-                    if( json.response.body.items[0].pm10Value != "-" ) {
-                        logDebug "PM10 value: ${json.response.body.items[0].pm10Value}"
+                    if ( json.response.body.items[0].pm10Value != "-" ) {
+                        logInfo "PM10 value: ${json.response.body.items[0].pm10Value}"
                         sendEvent(name: "pm10_value", value: json.response.body.items[0].pm10Value as Integer, unit: "㎍/㎥")
                         sendEvent(name: "dustLevel", value: json.response.body.items[0].pm10Value as Integer, unit: "㎍/㎥", displayed: true)
                     } else {
                     	sendEvent(name: "pm10_value", value: "--", unit: "㎍/㎥")
                         sendEvent(name: "dustLevel", value: "--", unit: "㎍/㎥")
                     }
-                    if( json.response.body.items[0].pm25Value != "-" ) { 
-                        logDebug "PM25 value: ${json.response.body.items[0].pm25Value}"
+                    if ( json.response.body.items[0].pm25Value != "-" ) { 
+                        logInfo "PM25 value: ${json.response.body.items[0].pm25Value}"
                         sendEvent(name: "pm25_value", value: json.response.body.items[0].pm25Value as Integer, unit: "㎍/㎥")
                         sendEvent(name: "fineDustLevel", value: json.response.body.items[0].pm25Value as Integer, unit: "㎍/㎥", displayed: true)
                     } else {
@@ -367,29 +359,29 @@ boolean hasError()
                     }
                     
                     def display_value
-                    if( json.response.body.items[0].o3Value != "-" ) {
-                    	logDebug "Ozone: ${json.response.body.items[0].o3Value}"
+                    if ( json.response.body.items[0].o3Value != "-" ) {
+                    	logInfo "Ozone: ${json.response.body.items[0].o3Value}"
                         display_value = "\n" + json.response.body.items[0].o3Value + "\n"
                         sendEvent(name: "o3_value", value: display_value as String, unit: "ppm")
                     } else
                     	sendEvent(name: "o3_value", value: "--", unit: "ppm")
                     
-                    if( json.response.body.items[0].no2Value != "-" ) {
-                        logDebug "NO2: ${json.response.body.items[0].no2Value}"
+                    if ( json.response.body.items[0].no2Value != "-" ) {
+                        logInfo "NO2: ${json.response.body.items[0].no2Value}"
                         display_value = "\n" + json.response.body.items[0].no2Value + "\n"
                         sendEvent(name: "no2_value", value: display_value as String, unit: "ppm")
                     } else
                     	sendEvent(name: "no2_value", value: "--", unit: "ppm")
                     
-                    if( json.response.body.items[0].so2Value != "-" ) {
-                        logDebug "SO2: ${json.response.body.items[0].so2Value}"
+                    if ( json.response.body.items[0].so2Value != "-" ) {
+                        logInfo "SO2: ${json.response.body.items[0].so2Value}"
                         display_value = "\n" + json.response.body.items[0].so2Value + "\n"
                         sendEvent(name: "so2_value", value: display_value as String, unit: "ppm")
                     } else
                     	sendEvent(name: "so2_value", value: "--", unit: "ppm")
                     
-                    if( json.response.body.items[0].coValue != "-" ) {
-                        logDebug "CO: ${json.response.body.items[0].coValue}"
+                    if ( json.response.body.items[0].coValue != "-" ) {
+                        logInfo "CO: ${json.response.body.items[0].coValue}"
                         display_value = "\n" + json.response.body.items[0].coValue + "\n"
                         
                         def carbonMonoxide_value = "clear"
@@ -404,18 +396,17 @@ boolean hasError()
                     	sendEvent(name: "co_value", value: "--", unit: "ppm")
                     
                     def khai_text = isEnglish() ? "unknown" : "알수없음"
-                    if( json.response.body.items[0].khaiValue != "-" ) {
+                    if ( json.response.body.items[0].khaiValue != "-" ) {
                         def khai = json.response.body.items[0].khaiValue as Integer
                         logInfo "Khai value: ${khai}"
                         
-                        def station_display_name = json.response.body.items[0].stationName
+                        def station_display_name = settings?.stationName
+                        log.trace "fakeStationName=$fakeStationName, station_display_name=$station_display_name"
+                        if (fakeStationName != null) station_display_name = fakeStationName
                         
-                        if (fakeStationName)
-                        	station_display_name = fakeStationName
+	                    sendEvent(name:"data_time", value: " " + station_display_name + (isEnglish() ? " air quality: ${khai}\n measurement time: " : " 대기질 수치: ${khai}\n 측정 시간: ") + json.response.body.items[0].dataTime)
                         
-	                    sendEvent(name:"data_time", value: " " + station_display_name + (isEnglish() ? " air quality numbers: ${khai}\n measurement time: " : " 대기질 수치: ${khai}\n 측정 시간: " + resp.data.list[0].dataTime) + "\nVersion: " + dthVersion)
-                        
-                  		sendEvent(name: "airQuality", value: json.response.body.items[0].khaiValue as Integer, displayed: true)
+                  		sendEvent(name: "airQualityIndex", value: json.response.body.items[0].khaiValue as Integer, displayed: true)
 
                         if (khai > 250) khai_text = isEnglish() ? "very bad" : "매우나쁨"
                         else if (khai > 100) khai_text = isEnglish() ? "bad" : "나쁨" 
@@ -425,16 +416,12 @@ boolean hasError()
                         sendEvent(name: "airQualityStatus", value: khai_text, unit: "")
                         
                     } else {
-                        def station_display_name = json.response.body.items[0].stationName
-                        
-                        if (fakeStationName)
-                        	station_display_name = fakeStationName
-
-                    
+                        def station_display_name = settings?.stationName
+                        if (fakeStationName != null) station_display_name = fakeStationName
 	                    sendEvent(name:"data_time", value: " " + station_display_name + (isEnglish() ? " Air quality numbers: no information\n measurement time: " : " 대기질 수치: 정보없음\n 측정 시간: ") + json.response.body.items[0].dataTime)                    
                     	sendEvent(name: "airQualityStatus", value: khai_text)
                     }
-    sendEvent(name: "Info", value: "AirKorea data parsed succesfuly")    
+    sendEvent(name: "Info", value: "AirKorea data parsed OK")    
 }
 
 def noResponseData() {
@@ -449,7 +436,7 @@ def noResponseData() {
     sendEvent(name: "so2_value", value: "--", unit: "ppm")
     sendEvent(name: "carbonMonoxide", value: "--")
     sendEvent(name: "co_value", value: "--", unit: "ppm")
-    sendEvent(name: "airQuality", value: "--")
+    sendEvent(name: "airQualityIndex", value: "--")
     sendEvent(name: "airQualityStatus", value: khai_text, unit: "")
     sendEvent(name: "data_time", value: unknown )
     sendEvent(name: "airQualityStatus", value: unknown, unit: "")
@@ -485,6 +472,7 @@ def pollAirKorea() {
 // https://www.yuseong.go.kr/eng/
 // https://www.yuseong.go.kr/ys_api/ys_api/getCtprvnList/?pageNo=1&numOfRows=100&rstTy=json
 
+/*
 def pollYuseong() {
 	logDebug "pollYuseong()"
     sendEvent(name: "Info", value: "polling Yuseong")
@@ -502,6 +490,7 @@ def pollYuseong() {
 	}
     else logWarn "Missing data from the device settings station name"
 }
+*/
 
 // WunderGround weather handle commands
 def pollWunderground() {
